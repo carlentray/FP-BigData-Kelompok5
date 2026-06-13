@@ -1,0 +1,387 @@
+import os
+import sys
+import json
+from datetime import datetime
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, to_timestamp, window, expr, hour, minute, floor, lit, coalesce, concat
+
+
+# 1. Konfigurasi Awal & Host Resolution
+import socket
+
+def resolve_host(docker_host, local_host):
+    try:
+        socket.gethostbyname(docker_host)
+        return docker_host
+    except socket.gaierror:
+        return local_host
+
+KAFKA_HOST = resolve_host("kafka", "localhost")
+KAFKA_PORT = 29092 if KAFKA_HOST == "kafka" else 9092
+POSTGRES_HOST = resolve_host("postgres-db", "localhost")
+
+print(f"DEBUG: Resolved hostnames -> Kafka: {KAFKA_HOST}:{KAFKA_PORT}, Postgres: {POSTGRES_HOST}:5432")
+
+# Kita muat package Spark SQL Kafka dan PostgreSQL JDBC Driver
+spark = SparkSession.builder \
+    .appName("ShelterEye-PassengerDensityProcessor") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.3") \
+    .config("spark.sql.shuffle.partitions", "2") \
+    .master("local[*]") \
+    .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
+print("Spark Session berhasil diinisialisasi dengan package Kafka & Postgres JDBC!")
+
+# Helper untuk mendapatkan koneksi PostgreSQL JDBC bypass classloader
+jdbc_driver = None
+
+def get_postgres_connection(spark, db_url, conn_props):
+    global jdbc_driver
+    jvm = spark._jvm
+    if jdbc_driver is None:
+        print("Mendaftarkan driver PostgreSQL JDBC...")
+        try:
+            jdbc_driver = jvm.org.postgresql.Driver()
+        except Exception as je:
+            print(f"Pendaftaran direct gagal ({je}), mencoba ClassLoader...")
+            class_loader = jvm.Thread.currentThread().getContextClassLoader()
+            driver_class = class_loader.loadClass("org.postgresql.Driver")
+            jdbc_driver = driver_class.newInstance()
+    return jdbc_driver.connect(db_url, conn_props)
+
+# 2. Setup Database PostgreSQL (Inisialisasi Tabel)
+def init_postgresql_tables():
+    db_url = f"jdbc:postgresql://{POSTGRES_HOST}:5432/db_sheltereye"
+    jvm = spark._jvm
+    conn_props = jvm.java.util.Properties()
+    conn_props.setProperty("user", "admin")
+    conn_props.setProperty("password", "sheltereyepassword")
+    conn_props.setProperty("driver", "org.postgresql.Driver")
+    
+    print("Menghubungkan ke PostgreSQL untuk inisialisasi skema tabel...")
+    conn = get_postgres_connection(spark, db_url, conn_props)
+    stmt = conn.createStatement()
+    
+    # 1. Tabel Kepadatan Penumpang
+    stmt.execute("""
+        CREATE TABLE IF NOT EXISTS passenger_density (
+            halte_name VARCHAR(100) PRIMARY KEY,
+            passenger_count INT,
+            predicted_overload_pct DOUBLE PRECISION,
+            predicted_status VARCHAR(100),
+            last_updated TIMESTAMP
+        )
+    """)
+    
+    # 2. Tabel ETA Bus (Diisi oleh Anggota 3)
+    stmt.execute("""
+        CREATE TABLE IF NOT EXISTS bus_eta (
+            halte_name VARCHAR(100),
+            bus_id VARCHAR(50),
+            eta_minutes DOUBLE PRECISION,
+            is_empty BOOLEAN,
+            last_updated TIMESTAMP,
+            PRIMARY KEY (halte_name, bus_id)
+        )
+    """)
+    
+    # 3. Tabel Rekomendasi Sistem (Fitur 5)
+    stmt.execute("""
+        CREATE TABLE IF NOT EXISTS system_recommendations (
+            halte_name VARCHAR(100) PRIMARY KEY,
+            status VARCHAR(50),
+            recommendation_text TEXT,
+            created_at TIMESTAMP
+        )
+    """)
+    
+    # Masukkan data dummy awal ke bus_eta jika kosong untuk keperluan demo/tes
+    rs = stmt.executeQuery("SELECT COUNT(*) FROM bus_eta")
+    rs.next()
+    count = rs.getInt(1)
+    if count == 0:
+        print("Menambahkan data dummy awal ke tabel bus_eta...")
+        stmt.execute("INSERT INTO bus_eta VALUES ('Dukuh Atas 1', 'BUS-01', 20.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta VALUES ('Karet Sudirman', 'BUS-02', 8.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta VALUES ('Monas', 'BUS-03', 18.0, true, NOW())")
+    
+    stmt.close()
+    conn.close()
+    print("Inisialisasi tabel di PostgreSQL selesai!")
+
+try:
+    init_postgresql_tables()
+except Exception as e:
+    print(f"Peringatan: Gagal melakukan inisialisasi tabel ke Postgres. Pastikan Docker sudah menyala! Error: {e}")
+
+# 3. Muat Data Historis Profil Penumpang (Untuk Fitur 4: AI Forecasting)
+HISTORICAL_PATH = "processing/historical_patterns.json"
+if os.path.exists(HISTORICAL_PATH):
+    print(f"Memuat data historis untuk AI Forecasting dari {HISTORICAL_PATH}...")
+    historical_df = spark.read.json(HISTORICAL_PATH)
+else:
+    print(f"Peringatan: File data historis tidak ditemukan di {HISTORICAL_PATH}. Membuat profil default...")
+    # Default schema
+    from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+    schema = StructType([
+        StructField("halte_name", StringType(), True),
+        StructField("hour", IntegerType(), True),
+        StructField("minute_slot", IntegerType(), True),
+        StructField("historical_count", IntegerType(), True)
+    ])
+    historical_df = spark.createDataFrame([], schema)
+
+# Caching data historis karena ukurannya kecil dan sering di-join
+historical_df.cache()
+
+# 4. Membaca Stream Transaksi dari Kafka
+print("Menghubungkan ke Kafka topic 'topic-transjakarta'...")
+kafka_stream_df = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", f"{KAFKA_HOST}:{KAFKA_PORT}") \
+    .option("subscribe", "topic-transjakarta") \
+    .option("startingOffsets", "latest") \
+    .load()
+
+# Skema data JSON dari Kafka (sesuai kolom dataset Transjakarta)
+transaction_schema = """
+    transID STRING,
+    payCardID STRING,
+    payCardBank STRING,
+    payCardName STRING,
+    payCardSex STRING,
+    payCardBirthDate STRING,
+    corridorID STRING,
+    corridorName STRING,
+    direction STRING,
+    tapInTime STRING,
+    tapInStopsID STRING,
+    tapInStopsName STRING,
+    tapInStopsLat DOUBLE,
+    tapInStopsLon DOUBLE,
+    tapOutTime STRING,
+    tapOutStopsID STRING,
+    tapOutStopsName STRING,
+    tapOutStopsLat DOUBLE,
+    tapOutStopsLon DOUBLE,
+    payAmount STRING,
+    payCardType STRING,
+    transType STRING,
+    streaming_timestamp STRING
+"""
+
+# Parsing kolom value dari Kafka (JSON)
+parsed_stream_df = kafka_stream_df \
+    .selectExpr("CAST(value AS STRING) as json_value") \
+    .select(from_json(col("json_value"), transaction_schema).alias("data")) \
+    .select("data.*")
+
+# Konversi string timestamp ke format Timestamp Spark & atur watermark
+processed_stream_df = parsed_stream_df \
+    .withColumn("timestamp", to_timestamp(col("streaming_timestamp"), "yyyy-MM-dd HH:mm:ss")) \
+    .withWatermark("timestamp", "10 minutes")
+
+# 5. Agregasi Jendela Waktu (Real-Time Passenger Volume)
+# Menghitung jumlah tap-in per halte dalam sliding window 10 menit, slide tiap 1 menit
+passenger_aggregation_df = processed_stream_df \
+    .groupBy(
+        window(col("timestamp"), "10 minutes", "1 minute"),
+        col("tapInStopsName").alias("halte_name")
+    ) \
+    .count() \
+    .select(
+        col("halte_name"),
+        col("count").alias("passenger_count"),
+        col("window.end").alias("last_updated")
+    )
+
+# 6. Integrasi AI Passenger Forecasting (Fitur 4)
+# Kita hitung waktu proyeksi 20 menit ke depan
+forecasting_prepared_df = passenger_aggregation_df \
+    .withColumn("projected_time", col("last_updated") + expr("INTERVAL 20 MINUTES")) \
+    .withColumn("proj_hour", hour(col("projected_time"))) \
+    .withColumn("proj_minute_slot", floor(minute(col("projected_time")) / 10))
+
+# Lakukan join dengan data historis
+# Jika join kosong (tidak ada kecocokan jam/halte), kita berikan historical_count default = 50
+joined_forecast_df = forecasting_prepared_df.join(
+    historical_df,
+    (forecasting_prepared_df.halte_name == historical_df.halte_name) &
+    (forecasting_prepared_df.proj_hour == historical_df.hour) &
+    (forecasting_prepared_df.proj_minute_slot == historical_df.minute_slot),
+    "left"
+).select(
+    forecasting_prepared_df.halte_name,
+    forecasting_prepared_df.passenger_count,
+    forecasting_prepared_df.last_updated,
+    coalesce(historical_df.historical_count, lit(50)).alias("historical_prediction")
+)
+
+# Hitung overload percentage berdasarkan batas kapasitas halte (misal kapasitas halte = 200)
+# Formula: (historical_prediction / 200) * 100
+final_streaming_df = joined_forecast_df \
+    .withColumn("predicted_overload_pct", (col("historical_prediction") / 200.0) * 100.0) \
+    .withColumn("predicted_status", 
+        expr("CASE WHEN predicted_overload_pct >= 100.0 THEN 'Potensi Overload ' || CAST(CAST(predicted_overload_pct AS INT) AS STRING) || '%' ELSE 'Normal' END")
+    )
+
+# 7. Fungsi foreachBatch untuk Menulis ke PostgreSQL & Menjalankan Rekomendasi
+def write_to_postgres_and_recommend(batch_df, batch_id):
+    if batch_df.isEmpty():
+        return
+        
+    print(f"\n--- [Batch ID: {batch_id}] Memproses data kepadatan penumpang & sistem rekomendasi ---")
+    
+    # 1. Ambil data ETA bus terdekat dari PostgreSQL (yang di-update oleh Anggota 3)
+    try:
+        bus_eta_df = spark.read \
+            .format("jdbc") \
+            .option("url", f"jdbc:postgresql://{POSTGRES_HOST}:5432/db_sheltereye") \
+            .option("dbtable", """(
+                SELECT halte_name, MIN(eta_minutes) as eta_minutes 
+                FROM bus_eta 
+                WHERE is_empty = true 
+                GROUP BY halte_name
+             ) as empty_buses""") \
+            .option("user", "admin") \
+            .option("password", "sheltereyepassword") \
+            .option("driver", "org.postgresql.Driver") \
+            .load()
+    except Exception as e:
+        print(f"Peringatan: Gagal membaca tabel bus_eta dari Postgres. Menggunakan default ETA. Error: {e}")
+        # Jika gagal (misal tabel kosong atau belum ada), kita buat dataframe kosong
+        from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+        schema = StructType([
+            StructField("halte_name", StringType(), True),
+            StructField("eta_minutes", DoubleType(), True)
+        ])
+        bus_eta_df = spark.createDataFrame([], schema)
+
+    # 2. Lakukan Left Join antara hasil agregasi batch saat ini dengan ETA Bus
+    joined_batch_df = batch_df.join(bus_eta_df, on="halte_name", how="left")
+    
+    # 3. Hitung Rekomendasi Headway (Fitur 5)
+    # Logika: Jika (passenger_count > 200) DAN (eta_minutes > 15 atau tidak ada bus yang datang), status = CRITICAL_SEND_BACKUP
+    # Di sini coalesce(eta_minutes, 999.0) memastikan jika tidak ada bus kosong terdekat, kita anggap waktu ETA sangat lama (999 menit)
+    final_recommendations_df = joined_batch_df \
+        .withColumn("eta", coalesce(col("eta_minutes"), lit(999.0))) \
+        .withColumn("rec_status", 
+            expr("CASE WHEN passenger_count > 200 AND eta > 15.0 THEN 'CRITICAL_SEND_BACKUP' ELSE 'NORMAL' END")
+        ) \
+        .withColumn("recommendation_text", 
+            expr("""CASE WHEN rec_status = 'CRITICAL_SEND_BACKUP' 
+                 THEN '⚠️ REKOMENDASI SISTEM: Segera luncurkan Bus Cadangan dari Pool Manggarai menuju Halte ' || halte_name || '!'
+                 ELSE 'Kondisi halte aman terkendali.' END""")
+        )
+
+    # Deduplicate: ambil baris dengan last_updated terbaru untuk tiap halte_name di batch ini
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import row_number
+    window_spec = Window.partitionBy("halte_name").orderBy(col("last_updated").desc())
+    deduplicated_df = final_recommendations_df \
+        .withColumn("rn", row_number().over(window_spec)) \
+        .filter(col("rn") == 1) \
+        .drop("rn")
+
+    # Pisahkan data untuk disimpan ke tabel masing-masing
+    # A. Data Kepadatan & Prediksi Penumpang
+    density_to_write = deduplicated_df.select(
+        "halte_name",
+        "passenger_count",
+        "predicted_overload_pct",
+        "predicted_status",
+        "last_updated"
+    )
+    
+    # B. Data Rekomendasi
+    rec_to_write = deduplicated_df.select(
+        "halte_name",
+        col("rec_status").alias("status"),
+        "recommendation_text",
+        col("last_updated").alias("created_at")
+    )
+    
+    # Tampilkan di console untuk monitoring
+    print("Live Data Kepadatan & Prediksi:")
+    density_to_write.show(truncate=False)
+    
+    print("Live Rekomendasi Sistem:")
+    rec_to_write.show(truncate=False)
+
+    # Tulis ke PostgreSQL menggunakan UPSERT manual (ON CONFLICT DO UPDATE) via temp table
+    # Langkah A: Tulis ke tabel temporary
+    db_url = f"jdbc:postgresql://{POSTGRES_HOST}:5432/db_sheltereye"
+    write_props = {
+        "user": "admin",
+        "password": "sheltereyepassword",
+        "driver": "org.postgresql.Driver"
+    }
+    
+    try:
+        # Tulis kepadatan ke tabel temp
+        density_to_write.write \
+            .jdbc(url=db_url, table="temp_passenger_density", mode="overwrite", properties=write_props)
+            
+        # Jalankan query UPSERT ke tabel utama passenger_density
+        upsert_density_sql = """
+            INSERT INTO passenger_density (halte_name, passenger_count, predicted_overload_pct, predicted_status, last_updated)
+            SELECT halte_name, passenger_count, predicted_overload_pct, predicted_status, last_updated 
+            FROM temp_passenger_density
+            ON CONFLICT (halte_name) 
+            DO UPDATE SET 
+                passenger_count = EXCLUDED.passenger_count,
+                predicted_overload_pct = EXCLUDED.predicted_overload_pct,
+                predicted_status = EXCLUDED.predicted_status,
+                last_updated = EXCLUDED.last_updated
+        """
+        
+        # Tulis rekomendasi ke tabel temp
+        rec_to_write.write \
+            .jdbc(url=db_url, table="temp_system_recommendations", mode="overwrite", properties=write_props)
+            
+        # Jalankan query UPSERT ke tabel utama system_recommendations
+        upsert_rec_sql = """
+            INSERT INTO system_recommendations (halte_name, status, recommendation_text, created_at)
+            SELECT halte_name, status, recommendation_text, created_at 
+            FROM temp_system_recommendations
+            ON CONFLICT (halte_name) 
+            DO UPDATE SET 
+                status = EXCLUDED.status,
+                recommendation_text = EXCLUDED.recommendation_text,
+                created_at = EXCLUDED.created_at
+        """
+        
+        # Eksekusi SQL UPSERT menggunakan JVM JDBC connection
+        jvm = spark._jvm
+        conn_props = jvm.java.util.Properties()
+        conn_props.setProperty("user", "admin")
+        conn_props.setProperty("password", "sheltereyepassword")
+        conn_props.setProperty("driver", "org.postgresql.Driver")
+        
+        conn = get_postgres_connection(spark, db_url, conn_props)
+        stmt = conn.createStatement()
+        stmt.execute(upsert_density_sql)
+        stmt.execute(upsert_rec_sql)
+        stmt.close()
+        conn.close()
+        
+        print("Data sukses disimpan ke PostgreSQL database (UPSERT berhasil)!")
+    except Exception as ex:
+        print(f"Gagal menulis data ke database PostgreSQL. Pastikan Docker Postgres aktif! Error: {ex}")
+
+# 8. Memulai Streaming Query
+print("Memulai streaming pemrosesan data real-time...")
+checkpoint_dir = "processing/checkpoints/passenger_density"
+
+# Pastikan folder checkpoint bersih atau dibuat
+os.makedirs(checkpoint_dir, exist_ok=True)
+
+query = final_streaming_df.writeStream \
+    .foreachBatch(write_to_postgres_and_recommend) \
+    .outputMode("update") \
+    .option("checkpointLocation", checkpoint_dir) \
+    .start()
+
+# Standby menangkap data secara kontinu
+query.awaitTermination()

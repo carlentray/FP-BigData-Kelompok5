@@ -1,0 +1,45 @@
+[
+  {"halte_name": "Dukuh Atas 1", "hour": 7, "minute_slot": 0, "historical_count": 180},
+  {"halte_name": "Dukuh Atas 1", "hour": 7, "minute_slot": 3, "historical_count": 240},
+  {"halte_name": "Dukuh Atas 1", "hour": 8, "minute_slot": 0, "historical_count": 250},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 0, "historical_count": 220},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 1, "historical_count": 245},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 2, "historical_count": 260},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 3, "historical_count": 275},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 4, "historical_count": 290},
+  {"halte_name": "Dukuh Atas 1", "hour": 17, "minute_slot": 5, "historical_count": 280},
+  {"halte_name": "Dukuh Atas 1", "hour": 18, "minute_slot": 0, "historical_count": 240},
+  {"halte_name": "Dukuh Atas 1", "hour": 18, "minute_slot": 3, "historical_count": 190},
+  
+  {"halte_name": "Karet Sudirman", "hour": 7, "minute_slot": 3, "historical_count": 190},
+  {"halte_name": "Karet Sudirman", "hour": 8, "minute_slot": 0, "historical_count": 210},
+  {"halte_name": "Karet Sudirman", "hour": 17, "minute_slot": 1, "historical_count": 210},
+  {"halte_name": "Karet Sudirman", "hour": 17, "minute_slot": 3, "historical_count": 250},
+  {"halte_name": "Karet Sudirman", "hour": 17, "minute_slot": 5, "historical_count": 230},
+  {"halte_name": "Karet Sudirman", "hour": 18, "minute_slot": 0, "historical_count": 180},
+
+  {"halte_name": "Monas", "hour": 7, "minute_slot": 3, "historical_count": 120},
+  {"halte_name": "Monas", "hour": 17, "minute_slot": 1, "historical_count": 190},
+  {"halte_name": "Monas", "hour": 17, "minute_slot": 3, "historical_count": 230},
+  {"halte_name": "Monas", "hour": 17, "minute_slot": 5, "historical_count": 220},
+
+  {"halte_name": "Harmoni Central", "hour": 7, "minute_slot": 3, "historical_count": 210},
+  {"halte_name": "Harmoni Central", "hour": 8, "minute_slot": 0, "historical_count": 230},
+  {"halte_name": "Harmoni Central", "hour": 17, "minute_slot": 1, "historical_count": 220},
+  {"halte_name": "Harmoni Central", "hour": 17, "minute_slot": 3, "historical_count": 260},
+  {"halte_name": "Harmoni Central", "hour": 17, "minute_slot": 5, "historical_count": 240},
+
+  {"halte_name": "Manggarai", "hour": 7, "minute_slot": 3, "historical_count": 240},
+  {"halte_name": "Manggarai", "hour": 8, "minute_slot": 0, "historical_count": 260},
+  {"halte_name": "Manggarai", "hour": 17, "minute_slot": 1, "historical_count": 250},
+  {"halte_name": "Manggarai", "hour": 17, "minute_slot": 3, "historical_count": 280},
+  {"halte_name": "Manggarai", "hour": 17, "minute_slot": 5, "historical_count": 270},
+
+  {"halte_name": "Kampung Melayu", "hour": 7, "minute_slot": 3, "historical_count": 180},
+  {"halte_name": "Kampung Melayu", "hour": 17, "minute_slot": 3, "historical_count": 220},
+  {"halte_name": "Kampung Melayu", "hour": 17, "minute_slot": 5, "historical_count": 210},
+
+  {"halte_name": "Senen", "hour": 7, "minute_slot": 3, "historical_count": 170},
+  {"halte_name": "Senen", "hour": 17, "minute_slot": 3, "historical_count": 230},
+  {"halte_name": "Senen", "hour": 17, "minute_slot": 5, "historical_count": 200}
+]

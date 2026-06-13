@@ -10,15 +10,15 @@ try:
         bootstrap_servers=['localhost:9092'],
         value_serializer=lambda v: json.dumps(v).encode('utf-8')
     )
-    print("✅ Berhasil konek ke Kafka Broker!")
+    print("SUCCESS: Connected to Kafka Broker!")
 except Exception as e:
-    print(f"❌ Gagal konek ke Kafka. Pastikan Docker sudah UP! Error: {e}")
+    print(f"ERROR: Failed to connect to Kafka. Make sure Docker is UP! Error: {e}")
     exit()
 
 # 2. PATH menuju file CSV
 CSV_PATH = 'ingestion/dataset/dfTransjakarta180krows.csv'
 
-print("🚀 Mulai mengalirkan data ASLI Transjakarta (180k Rows) ke Kafka...")
+print("START: Streaming Transjakarta data to Kafka...")
 print("Tekan Ctrl+C untuk berhenti.\n")
 
 try:
@@ -41,8 +41,8 @@ try:
             time.sleep(1)
 
 except FileNotFoundError:
-    print(f"❌ File tidak ditemukan di {CSV_PATH}.")
+    print(f"ERROR: File not found at {CSV_PATH}.")
 except KeyboardInterrupt:
-    print("\n🛑 Feeder dihentikan oleh pengguna.")
+    print("\nSTOP: Feeder stopped by user.")
 finally:
     producer.flush()
