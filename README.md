@@ -67,7 +67,24 @@ python ingestion/feeder.py
 ```
 Tekan Ctrl + C pada terminal untuk menghentikan simulasi aliran data.
 
-### 4. Mematikan Sistem
+### 4. Menjalankan Pemrosesan Spasial & ETA
+ 
+Buka terminal baru (biarkan `feeder.py` tetap berjalan), lalu hapus checkpoint lama jika script pernah dijalankan sebelumnya:
+```bash
+docker exec sheltereye-spark-master rm -rf /opt/spark/work-dir/processing/checkpoints/spatial_eta
+```
+ 
+Kemudian jalankan script ETA via `spark-submit`:
+```bash
+docker exec sheltereye-spark-master /opt/spark/bin/spark-submit --master local[*] --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.3 /opt/spark/work-dir/processing/spatial_eta_logic.py
+```
+ 
+Untuk memverifikasi hasil di database:
+```bash
+docker exec -it sheltereye-postgres psql -U admin -d db_sheltereye -c "SELECT * FROM bus_eta ORDER BY eta_minutes;"
+```
+
+### 5. Mematikan Sistem
 Jika sesi pengujian atau coding sudah selesai, matikan seluruh infrastruktur agar laptop tidak berat dengan perintah:
 ```bash
 docker-compose down
