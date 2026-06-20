@@ -164,6 +164,8 @@ def write_eta_to_postgres(batch_df, batch_id):
         col("next_stop").alias("halte_name"),
         col("bus_id"),
         col("eta_minutes"),
+        col("lat").alias("bus_lat"),
+        col("lon").alias("bus_lon"),
         col("bus_capacity"),
         col("current_passenger_count"),
         col("occupancy_pct"),
@@ -190,12 +192,14 @@ def write_eta_to_postgres(batch_df, batch_id):
         # SQL UPSERT ke tabel utama bus_eta
         # Mendukung kapasitas bus dan jumlah penumpang live di bus
         upsert_eta_sql = """
-            INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated)
-            SELECT halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated 
+            INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_lat, bus_lon, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated)
+            SELECT halte_name, bus_id, eta_minutes, bus_lat, bus_lon, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated 
             FROM temp_bus_eta
             ON CONFLICT (halte_name, bus_id) 
             DO UPDATE SET 
                 eta_minutes = EXCLUDED.eta_minutes,
+                bus_lat = EXCLUDED.bus_lat,
+                bus_lon = EXCLUDED.bus_lon,
                 bus_capacity = EXCLUDED.bus_capacity,
                 current_passenger_count = EXCLUDED.current_passenger_count,
                 occupancy_pct = EXCLUDED.occupancy_pct,

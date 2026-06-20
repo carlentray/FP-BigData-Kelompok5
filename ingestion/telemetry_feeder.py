@@ -19,7 +19,7 @@ except Exception as e:
 
 # 2. Ambil URI WebSocket
 # Prioritas: 1) Argumen terminal, 2) Default remote IP, 3) Fallback localhost
-DEFAULT_URI = "ws://70.153.136.193:8765"
+DEFAULT_URI = "ws://70.153.136.193:8766"
 FALLBACK_LOCAL_URI = "ws://localhost:8766"
 
 ws_uri = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_URI

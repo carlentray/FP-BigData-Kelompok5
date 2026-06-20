@@ -1,0 +1,62 @@
+# =============================================================
+# Transjakarta Simulator — Docker Compose
+# =============================================================
+# Dua endpoint WebSocket:
+#   1. Transaction WS  → ws://localhost:8765
+#   2. Vehicle GPS WS   → ws://localhost:8766
+#
+# Usage:
+#   docker-compose up -d --build      # Start kedua service
+#   docker-compose logs -f            # Lihat log
+#   docker-compose down               # Stop semua
+# =============================================================
+
+services:
+  # --- Endpoint 1: Transaction Simulator (tap-in / tap-out) ---
+  transaction-ws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tj-transaction-ws
+    command: python server.py
+    ports:
+      - "8765:8765"
+    environment:
+      CSV_PATH: /data/dfTransjakarta1_4MRows.csv
+      WS_HOST: "0.0.0.0"
+      WS_PORT: "8765"
+      SPEED_MULTIPLIER: "1"
+      BATCH_INTERVAL_MS: "100"
+    volumes:
+      - ./dfTransjakarta1_4MRows.csv:/data/dfTransjakarta1_4MRows.csv:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import websockets, asyncio; asyncio.run(websockets.connect('ws://localhost:8765').__aenter__())"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --- Endpoint 2: Vehicle GPS Telemetry Simulator (GTFS) ---
+  vehicle-ws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tj-vehicle-ws
+    command: python vehicle_server.py
+    ports:
+      - "8766:8766"
+    environment:
+      GTFS_DIR: /data/file_gtfs
+      WS_HOST: "0.0.0.0"
+      WS_PORT: "8766"
+      SPEED_MULTIPLIER: "1"
+      TICK_INTERVAL_S: "5.0"
+      SERVICE_FILTER: "SH"
+    volumes:
+      - ./file_gtfs:/data/file_gtfs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import websockets, asyncio; asyncio.run(websockets.connect('ws://localhost:8766').__aenter__())"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

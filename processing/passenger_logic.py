@@ -80,6 +80,8 @@ def init_postgresql_tables():
             halte_name VARCHAR(100),
             bus_id VARCHAR(50),
             eta_minutes DOUBLE PRECISION,
+            bus_lat DOUBLE PRECISION,
+            bus_lon DOUBLE PRECISION,
             bus_capacity INT,
             current_passenger_count INT,
             occupancy_pct DOUBLE PRECISION,
@@ -99,15 +101,28 @@ def init_postgresql_tables():
         )
     """)
     
+    # 4. Tabel Log Transaksi Mentah
+    stmt.execute("""
+        CREATE TABLE IF NOT EXISTS passenger_transactions (
+            trans_id VARCHAR(100) PRIMARY KEY,
+            card_id VARCHAR(50),
+            bank VARCHAR(50),
+            name VARCHAR(100),
+            halte_name VARCHAR(100),
+            tap_in_time TIMESTAMP,
+            created_at TIMESTAMP
+        )
+    """)
+    
     # Masukkan data dummy awal ke bus_eta jika kosong untuk keperluan demo/tes
     rs = stmt.executeQuery("SELECT COUNT(*) FROM bus_eta")
     rs.next()
     count = rs.getInt(1)
     if count == 0:
         print("Menambahkan data dummy awal ke tabel bus_eta...")
-        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Dukuh Atas 1', 'BUS-01', 20.0, 80, 0, 0.0, true, NOW())")
-        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Karet Sudirman', 'BUS-02', 8.0, 80, 0, 0.0, true, NOW())")
-        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Monas', 'BUS-03', 18.0, 80, 0, 0.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_lat, bus_lon, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Dukuh Atas 1', 'BUS-01', 20.0, -6.2001, 106.8000, 80, 0, 0.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_lat, bus_lon, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Karet Sudirman', 'BUS-02', 8.0, -6.2120, 106.8200, 80, 0, 0.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_lat, bus_lon, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Monas', 'BUS-03', 18.0, -6.1754, 106.8271, 80, 0, 0.0, true, NOW())")
     
     stmt.close()
     conn.close()
@@ -274,7 +289,7 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
         ) \
         .withColumn("recommendation_text", 
             expr("""CASE WHEN rec_status = 'CRITICAL_SEND_BACKUP' 
-                 THEN '⚠️ REKOMENDASI SISTEM: Segera luncurkan Bus Cadangan dari Pool Manggarai menuju Halte ' || halte_name || '!'
+                 THEN 'REKOMENDASI SISTEM: Segera luncurkan Bus Cadangan dari Pool Manggarai menuju Halte ' || halte_name || '!'
                  ELSE 'Kondisi halte aman terkendali.' END""")
         )
 
@@ -373,18 +388,77 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
     except Exception as ex:
         print(f"Gagal menulis data ke database PostgreSQL. Pastikan Docker Postgres aktif! Error: {ex}")
 
+# Fungsi helper untuk menulis raw transactions ke PostgreSQL (ON CONFLICT DO NOTHING)
+def write_raw_transactions_to_postgres(batch_df, batch_id):
+    if batch_df.isEmpty():
+        return
+        
+    # Ambil kolom yang diperlukan untuk log transaksi mentah
+    raw_tx_to_write = batch_df.select(
+        col("transID").alias("trans_id"),
+        col("payCardID").alias("card_id"),
+        col("payCardBank").alias("bank"),
+        col("payCardName").alias("name"),
+        col("tapInStopsName").alias("halte_name"),
+        to_timestamp(col("tapInTime"), "yyyy-MM-dd HH:mm:ss").alias("tap_in_time"),
+        col("timestamp").alias("created_at")
+    ).distinct()
+    
+    db_url = f"jdbc:postgresql://{POSTGRES_HOST}:5432/db_sheltereye"
+    write_props = {
+        "user": "admin",
+        "password": "sheltereyepassword",
+        "driver": "org.postgresql.Driver"
+    }
+    
+    try:
+        # Tulis ke tabel temp_transactions
+        raw_tx_to_write.write \
+            .jdbc(url=db_url, table="temp_passenger_transactions", mode="overwrite", properties=write_props)
+            
+        # SQL UPSERT ke tabel utama
+        upsert_tx_sql = """
+            INSERT INTO passenger_transactions (trans_id, card_id, bank, name, halte_name, tap_in_time, created_at)
+            SELECT trans_id, card_id, bank, name, halte_name, tap_in_time, created_at 
+            FROM temp_passenger_transactions
+            ON CONFLICT (trans_id) 
+            DO NOTHING
+        """
+        
+        jvm = spark._jvm
+        conn_props = jvm.java.util.Properties()
+        conn_props.setProperty("user", "admin")
+        conn_props.setProperty("password", "sheltereyepassword")
+        conn_props.setProperty("driver", "org.postgresql.Driver")
+        
+        conn = get_postgres_connection(spark, db_url, conn_props)
+        stmt = conn.createStatement()
+        stmt.execute(upsert_tx_sql)
+        stmt.close()
+        conn.close()
+    except Exception as ex:
+        print(f"Gagal menulis data transaksi mentah ke database. Error: {ex}")
+
 # 8. Memulai Streaming Query
 print("Memulai streaming pemrosesan data real-time...")
 checkpoint_dir = "processing/checkpoints/passenger_density"
+checkpoint_raw = "processing/checkpoints/raw_transactions"
 
 # Pastikan folder checkpoint bersih atau dibuat
 os.makedirs(checkpoint_dir, exist_ok=True)
+os.makedirs(checkpoint_raw, exist_ok=True)
 
-query = final_streaming_df.writeStream \
+query_density = final_streaming_df.writeStream \
     .foreachBatch(write_to_postgres_and_recommend) \
     .outputMode("update") \
     .option("checkpointLocation", checkpoint_dir) \
     .start()
 
+query_raw = processed_stream_df.writeStream \
+    .foreachBatch(write_raw_transactions_to_postgres) \
+    .outputMode("append") \
+    .option("checkpointLocation", checkpoint_raw) \
+    .start()
+
 # Standby menangkap data secara kontinu
-query.awaitTermination()
+spark.streams.awaitAnyTermination()
