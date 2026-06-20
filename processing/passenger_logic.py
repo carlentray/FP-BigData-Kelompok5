@@ -80,6 +80,9 @@ def init_postgresql_tables():
             halte_name VARCHAR(100),
             bus_id VARCHAR(50),
             eta_minutes DOUBLE PRECISION,
+            bus_capacity INT,
+            current_passenger_count INT,
+            occupancy_pct DOUBLE PRECISION,
             is_empty BOOLEAN,
             last_updated TIMESTAMP,
             PRIMARY KEY (halte_name, bus_id)
@@ -102,9 +105,9 @@ def init_postgresql_tables():
     count = rs.getInt(1)
     if count == 0:
         print("Menambahkan data dummy awal ke tabel bus_eta...")
-        stmt.execute("INSERT INTO bus_eta VALUES ('Dukuh Atas 1', 'BUS-01', 20.0, true, NOW())")
-        stmt.execute("INSERT INTO bus_eta VALUES ('Karet Sudirman', 'BUS-02', 8.0, true, NOW())")
-        stmt.execute("INSERT INTO bus_eta VALUES ('Monas', 'BUS-03', 18.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Dukuh Atas 1', 'BUS-01', 20.0, 80, 0, 0.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Karet Sudirman', 'BUS-02', 8.0, 80, 0, 0.0, true, NOW())")
+        stmt.execute("INSERT INTO bus_eta (halte_name, bus_id, eta_minutes, bus_capacity, current_passenger_count, occupancy_pct, is_empty, last_updated) VALUES ('Monas', 'BUS-03', 18.0, 80, 0, 0.0, true, NOW())")
     
     stmt.close()
     conn.close()
