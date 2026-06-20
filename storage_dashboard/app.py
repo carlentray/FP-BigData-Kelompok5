@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import psycopg2
 import folium
+from folium import DivIcon
 from streamlit_folium import folium_static
 import plotly.express as px
 import plotly.graph_objects as go
@@ -255,11 +256,33 @@ else:
                     <p style="margin: 4px 0;"><b>Kapasitas Terisi:</b> {bus['current_passenger_count']} penumpang ({bus['occupancy_pct']:.0f}%)</p>
                 </div>
                 """
+                # Flat, modern circular navy badge with white bus SVG icon (Fleet Management Style)
+                bus_icon_html = """
+                <div style="
+                    background-color: #0b2f64; 
+                    border: 2px solid #ffffff; 
+                    border-radius: 50%; 
+                    width: 30px; 
+                    height: 30px; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+                ">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="#ffffff">
+                        <path d="M18 11H6V6h12v5zm-1.5 4c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm-9 0c-.83 0-1.5-.67-1.5-1.5S8.17 12 9 12s1.5.67 1.5 1.5S9.83 15 7.5 15zm11.5-11H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h1v1.5c0 .83.67 1.5 1.5 1.5h1c.83 0 1.5-.67 1.5-1.5V18h6v1.5c0 .83.67 1.5 1.5 1.5h1c.83 0 1.5-.67 1.5-1.5V18h1c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                </div>
+                """
                 folium.Marker(
                     location=[bus['bus_lat'], bus['bus_lon']],
                     popup=folium.Popup(bus_popup_html, max_width=250),
                     tooltip=f"Bus {bus['bus_id']} (Menuju Halte {bus['halte_name']})",
-                    icon=folium.Icon(color='blue', icon='bus', prefix='fa')
+                    icon=DivIcon(
+                        icon_size=(30, 30),
+                        icon_anchor=(15, 15),
+                        html=bus_icon_html
+                    )
                 ).add_to(m)
             
         # Display Folium Map in Streamlit
