@@ -30,7 +30,8 @@ Berikut adalah panduan demonstrasi dan penjelasan komponen kode berdasarkan Rubr
 ### CPMK-4: Teknik Analisis & Kualitas Output (Bobot 25%)
 * **Kesesuaian Kode:** Penerapan dua metode analisis lanjutan:
   * **Machine Learning / Forecasting:** Join prediktif deret waktu dengan profil historis halte 20 menit ke depan.
-  * **Geospatial & Clustering Analisis:** Perhitungan jarak euclidean koordinat spasial bus ke halte tujuan untuk memproyeksikan estimasi waktu kedatangan (ETA).
+  * **Geospatial & Clustering Analisis:** Perhitungan jarak Haversine koordinat spasial bus ke halte tujuan untuk memproyeksikan estimasi waktu kedatangan (ETA).
+  * **Evaluasi Model (RMSE & MAPE):** Setiap batch Spark dievaluasi performa prediksinya menggunakan metrik standar **RMSE** (Root Mean Square Error) dan **MAPE** (Mean Absolute Percentage Error). Hasil cetak ke terminal log setiap micro-batch.
 
 ### CPMK 1-4: Keunikan & Inovasi Solusi (Bobot 10%)
 * **Kesesuaian Kode:** Integrasi sensor spasial GPS bus dengan transaksi tap-in penumpang untuk menghasilkan rekomendasi headway bus secara otomatis.
@@ -42,7 +43,10 @@ Berikut adalah panduan demonstrasi dan penjelasan komponen kode berdasarkan Rubr
   | **Headway Control** | Jadwal bus statis dan rentan penumpukan bus. | Pemicu otomatis pengiriman bus cadangan dari pool. |
 
 ### CPMK 2-4: Implementasi & Demo Sistem (Bobot 10%)
-* **Kesesuaian Kode:** Pipeline data aktif end-to-end teruji lancar dengan mekanisme penanganan data kosong dan data error via DB fallback connection.
+* **Kesesuaian Kode:** Pipeline data aktif end-to-end teruji lancar dengan mekanisme penanganan data kosong dan data error via:
+  * `traceback.print_exc()` pada setiap blok `except` untuk error tracking production-ready.
+  * Fallback dataframe kosong jika koneksi DB gagal, mencegah streaming crash.
+  * Logging evaluasi `RMSE` dan `MAPE` per batch di terminal output.
 * **Logging & Monitoring:** Spark Streaming UI (port 4040) untuk memantau visualisasi grafik throughput input rate, watermark delay, dan logging terminal.
 
 ---
@@ -74,21 +78,22 @@ Berikut adalah panduan demonstrasi dan penjelasan komponen kode berdasarkan Rubr
 
 ### A. Lakehouse Bronze Layer (CPMK-3)
 Tunjukkan baris kode di akhir file [passenger_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/passenger_logic.py):
-* **Parquet Bronze Streaming (Line 501-520):** Kode yang mengonversi data stream mentah, menambahkan kolom tanggal (`to_date`), melakukan partisi (`partitionBy`), dan menulisnya ke direktori lokal dalam format Parquet.
+* **Parquet Bronze Streaming (Line 541-556):** Kode yang mengonversi data stream mentah, menambahkan kolom tanggal (`to_date`), melakukan partisi (`partitionBy`), dan menulisnya ke direktori lokal dalam format Parquet di `storage/lakehouse/bronze/`.
 
 ### B. Medallion Layer & AI Forecasting (CPMK-3 & CPMK-4)
 Tunjukkan file [passenger_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/passenger_logic.py):
-* **Parsing & Bronze Layer (Line 156-163):** Kode membaca string Kafka JSON dan melakukan parsing skema data mentah terstruktur.
-* **Windowing Silver Layer (Line 192-202):** Penerapan watermarking late-data dan group-by time window.
-* **AI Projection Gold Layer (Line 203-245):** Logika peramalan penumpukan 20 menit ke depan dengan mencocokkan profil waktu historis.
+* **BRONZE Layer – Kafka Ingestion (Line 157-167):** Comment eksplisit `[MEDALLION ARCHITECTURE - BRONZE INGESTION LAYER]` — membaca stream JSON mentah dari Kafka.
+* **SILVER Layer – Watermark & Cleaning (Line 196-225):** Comment `[MEDALLION ARCHITECTURE - SILVER TRANSFORMATION LAYER]` — watermarking late-data dan sliding window.
+* **GOLD Layer – AI Forecasting (Line 211-259):** Comment `[MEDALLION ARCHITECTURE - GOLD SERVING LAYER]` — join prediksi overload 20 menit ke depan.
+* **MAPE & RMSE Evaluation (Line 268-289):** Blok evaluasi model AI secara otomatis dihitung per batch dengan mencetak `RMSE` dan `MAPE` ke terminal.
 
 ### C. Analisis Spasial & ETA Telemetry (CPMK-4)
 Tunjukkan file [spatial_eta_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/spatial_eta_logic.py):
-* **Euclidean Distance & ETA Projection (Line 117-140):** Rumus matematika untuk menghitung jarak spasial GPS koordinat bus ke koordinat halte dan membaginya dengan sisa waktu kedatangan (ETA).
+* **Haversine Distance & ETA Projection (Line 109-149):** Rumus matematika Haversine untuk menghitung jarak GPS bus ke koordinat halte, kemudian dibagi kecepatan efektif untuk mendapat ETA dalam menit.
 
 ### D. Ingestion Layer (CPMK-2)
 Tunjukkan file [feeder.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/ingestion/feeder.py):
-* **Kafka Producer Ingestion (Line 42-65):** Client WebSocket asinkron yang menangkap batch real-time dari server data luar lalu meneruskannya langsung ke Kafka Broker topik `topic-transjakarta`.
+* **Kafka Producer Ingestion:** Client WebSocket asinkron yang menangkap batch real-time dari server data luar lalu meneruskannya langsung ke Kafka Broker topik `topic-transjakarta`.
 
 ---
 
@@ -114,7 +119,9 @@ Berikut adalah panduan perkataan (script) yang bisa Anda ucapkan saat mempresent
 
 ### 📊 Rubrik 4: Teknik Analisis Lanjutan (ML Forecasting & GIS ETA)
 * **Apa yang diucapkan:**
-  > *"Kami menerapkan dua analisis lanjutan. Pertama adalah **AI Forecasting** di file [passenger_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/passenger_logic.py#L203-L245) untuk memproyeksikan kepadatan halte 20 menit ke depan menggunakan pola historis data penumpang. Kedua adalah **Clustering & Analisis Spasial GIS** di file [spatial_eta_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/spatial_eta_logic.py#L117-L140) dengan rumus matematika Haversine Distance untuk menghitung sisa waktu perjalanan (ETA) armada bus ke halte tujuan berdasarkan koordinat GPS langsung."*
+  > *"Kami menerapkan dua analisis lanjutan. Pertama adalah **AI Forecasting** di file [passenger_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/passenger_logic.py#L211-L259) untuk memproyeksikan kepadatan halte 20 menit ke depan menggunakan pola historis data penumpang. Kedua adalah **Clustering & Analisis Spasial GIS** di file [spatial_eta_logic.py](file:///c:/Users/LOQ/Downloads/FP-BigData-Kelompok5-main/FP-BigData-Kelompok5-main/processing/spatial_eta_logic.py#L109-L149) dengan rumus matematika **Haversine Distance** untuk menghitung sisa waktu perjalanan (ETA) armada bus ke halte tujuan berdasarkan koordinat GPS langsung.*
+  >
+  > *Selain itu, untuk membuktikan kualitas model prediksi kami, setiap batch Spark secara otomatis menghitung dan mencetak **RMSE** (Root Mean Square Error) dan **MAPE** (Mean Absolute Percentage Error) ke terminal log. Ini adalah standar industri untuk mengevaluasi akurasi model forecasting (sorot line 268-289 di passenger_logic.py)."*
 
 ### 🛠️ Rubrik 5 & 6: Keunikan & Demo Sistem Aktif (Monitoring)
 * **Apa yang diucapkan:**
