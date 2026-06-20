@@ -52,7 +52,7 @@ st.markdown("""
         margin-bottom: 25px;
     }
     </style>
-""", unsafe_style_allowed=True)
+""", unsafe_allow_html=True)
 
 # Database connection helper
 def get_db_connection():
@@ -95,8 +95,8 @@ def load_data():
         return None, None, None, str(e)
 
 # Layout Title
-st.markdown('<div class="header-style">ShelterEye Dashboard</div>', unsafe_style_allowed=True)
-st.markdown('<div class="sub-header-style">Transjakarta Real-Time Streaming Analytics & Dynamic Headway Recommendation System</div>', unsafe_style_allowed=True)
+st.markdown('<div class="header-style">ShelterEye Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header-style">Transjakarta Real-Time Streaming Analytics & Dynamic Headway Recommendation System</div>', unsafe_allow_html=True)
 
 # Auto Refresh Control in Sidebar
 st.sidebar.header("⏱️ Controls & Info")
@@ -200,7 +200,7 @@ else:
                         <p>{r['recommendation_text']}</p>
                         <small style="color: #8892b0;">Timestamp: {r['created_at']}</small>
                     </div>
-                """, unsafe_style_allowed=True)
+                """, unsafe_allow_html=True)
         else:
             st.success("🟢 All stations operating within normal capacity. No backup buses required.")
 
