@@ -61,7 +61,10 @@ HALTE_COORDINATES = {
     "Senen": {"lat": -6.1744, "lon": 106.8431}
 }
 
-# 3. Membaca Stream dari Kafka topic-telemetry
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - BRONZE INGESTION LAYER] ###
+# ==============================================================================
+# 3. Membaca Stream dari Kafka topic-telemetry (Data Mentah)
 print("Menghubungkan ke Kafka topic 'topic-telemetry'...")
 telemetry_stream_df = spark.readStream \
     .format("kafka") \
@@ -90,6 +93,9 @@ telemetry_schema = """
     streaming_timestamp STRING
 """
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - SILVER TRANSFORMATION LAYER (CLEANED & STRUCTURIZED)] ###
+# ==============================================================================
 parsed_telemetry_df = telemetry_stream_df \
     .selectExpr("CAST(value AS STRING) as json_value") \
     .select(from_json(col("json_value"), telemetry_schema).alias("data")) \
@@ -114,6 +120,9 @@ def calculate_haversine_dist(lat_col, lon_col, target_lat, target_lon):
     c = 2.0 * asin(sqrt(a_bounded))
     return R * c
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - GOLD PROCESSING LAYER (GEOSPATIAL JOIN & ETA CALCULATION)] ###
+# ==============================================================================
 # Tambahkan kolom jarak dan ETA untuk setiap halte target ke dalam dataframe
 # Untuk mencocokkan mana halte yang merupakan "next_stop", kita gunakan ekspresi dinamis
 processed_telemetry_df = parsed_telemetry_df \
@@ -236,6 +245,9 @@ query = filtered_eta_df.writeStream \
     .option("checkpointLocation", checkpoint_dir) \
     .start()
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - BRONZE STORAGE LAYER (PARQUET ON LOCAL DISK)] ###
+# ==============================================================================
 # B. Tulis Raw Telemetry ke Lakehouse Bronze Layer (Format Parquet, Partisi berdasarkan Tanggal)
 from pyspark.sql.functions import to_date
 bronze_telemetry_df = processed_telemetry_df.withColumn("date", to_date(col("timestamp")))

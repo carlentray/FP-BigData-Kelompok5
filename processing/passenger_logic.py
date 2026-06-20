@@ -153,7 +153,10 @@ else:
 # Caching data historis karena ukurannya kecil dan sering di-join
 historical_df.cache()
 
-# 4. Membaca Stream Transaksi dari Kafka
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - BRONZE INGESTION LAYER] ###
+# ==============================================================================
+# 4. Membaca Stream Transaksi dari Kafka (Data Mentah)
 print("Menghubungkan ke Kafka topic 'topic-transjakarta'...")
 kafka_stream_df = spark.readStream \
     .format("kafka") \
@@ -189,6 +192,9 @@ transaction_schema = """
     streaming_timestamp STRING
 """
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - SILVER TRANSFORMATION LAYER (CLEANED & WATERMARKED)] ###
+# ==============================================================================
 # Parsing kolom value dari Kafka (JSON)
 parsed_stream_df = kafka_stream_df \
     .selectExpr("CAST(value AS STRING) as json_value") \
@@ -200,6 +206,9 @@ processed_stream_df = parsed_stream_df \
     .withColumn("timestamp", to_timestamp(col("streaming_timestamp"), "yyyy-MM-dd HH:mm:ss")) \
     .withWatermark("timestamp", "10 minutes")
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - GOLD SERVING LAYER (AGGREGATIONS & AI FORECASTING)] ###
+# ==============================================================================
 # 5. Agregasi Jendela Waktu (Real-Time Passenger Volume)
 # Menghitung jumlah tap-in per halte dalam sliding window 10 menit, slide tiap 1 menit
 passenger_aggregation_df = processed_stream_df \
@@ -504,6 +513,9 @@ query_raw = processed_stream_df.writeStream \
     .option("checkpointLocation", checkpoint_raw) \
     .start()
 
+# ==============================================================================
+# ### [MEDALLION ARCHITECTURE - BRONZE STORAGE LAYER (PARQUET ON LOCAL DISK)] ###
+# ==============================================================================
 # 2. Write Raw Data to Lakehouse Bronze Layer (Format Parquet, Partisi berdasarkan Tanggal)
 from pyspark.sql.functions import to_date
 bronze_df = processed_stream_df.withColumn("date", to_date(col("timestamp")))
