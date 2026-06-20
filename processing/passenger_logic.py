@@ -237,9 +237,13 @@ joined_forecast_df = forecasting_prepared_df.join(
 )
 
 # Hitung overload percentage berdasarkan batas kapasitas halte (misal kapasitas halte = 200)
-# Formula: (historical_prediction / 200) * 100
+# Skenario Overstimulated Demo: Memaksa Dukuh Atas 1 dan Kampung Melayu memiliki status overload tinggi
 final_streaming_df = joined_forecast_df \
-    .withColumn("predicted_overload_pct", (col("historical_prediction") / 200.0) * 100.0) \
+    .withColumn("predicted_overload_pct", 
+        expr("CASE WHEN halte_name = 'Dukuh Atas 1' THEN 135.0 "
+             "WHEN halte_name = 'Kampung Melayu' THEN 145.0 "
+             "ELSE (coalesce(historical_prediction, 50.0) / 200.0) * 100.0 END")
+    ) \
     .withColumn("predicted_status", 
         expr("CASE WHEN predicted_overload_pct >= 100.0 THEN 'Potensi Overload ' || CAST(CAST(predicted_overload_pct AS INT) AS STRING) || '%' ELSE 'Normal' END")
     )
@@ -281,11 +285,13 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
     
     # 3. Hitung Rekomendasi Headway (Fitur 5)
     # Logika: Jika (passenger_count > 200) DAN (eta_minutes > 15 atau tidak ada bus yang datang), status = CRITICAL_SEND_BACKUP
-    # Di sini coalesce(eta_minutes, 999.0) memastikan jika tidak ada bus kosong terdekat, kita anggap waktu ETA sangat lama (999 menit)
+    # Skenario Overstimulated Demo: Secara otomatis memicu status kritis untuk Dukuh Atas 1 dan Kampung Melayu
     final_recommendations_df = joined_batch_df \
         .withColumn("eta", coalesce(col("eta_minutes"), lit(999.0))) \
         .withColumn("rec_status", 
-            expr("CASE WHEN passenger_count > 200 AND eta > 15.0 THEN 'CRITICAL_SEND_BACKUP' ELSE 'NORMAL' END")
+            expr("CASE WHEN (passenger_count > 200 AND eta > 15.0) "
+                 "OR (halte_name IN ('Dukuh Atas 1', 'Kampung Melayu')) "
+                 "THEN 'CRITICAL_SEND_BACKUP' ELSE 'NORMAL' END")
         ) \
         .withColumn("recommendation_text", 
             expr("""CASE WHEN rec_status = 'CRITICAL_SEND_BACKUP' 
@@ -381,6 +387,43 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
         stmt = conn.createStatement()
         stmt.execute(upsert_density_sql)
         stmt.execute(upsert_rec_sql)
+        
+        # Skenario Overstimulated Demo: Memaksa Dukuh Atas 1 dan Kampung Melayu selalu terdaftar sebagai overload & kritis
+        stmt.execute("""
+            INSERT INTO passenger_density (halte_name, passenger_count, predicted_overload_pct, predicted_status, last_updated)
+            VALUES ('Dukuh Atas 1', 270, 135.0, 'Potensi Overload 135%', NOW())
+            ON CONFLICT (halte_name) DO UPDATE 
+            SET passenger_count = EXCLUDED.passenger_count, 
+                predicted_overload_pct = EXCLUDED.predicted_overload_pct, 
+                predicted_status = EXCLUDED.predicted_status, 
+                last_updated = EXCLUDED.last_updated
+        """)
+        stmt.execute("""
+            INSERT INTO system_recommendations (halte_name, status, recommendation_text, created_at)
+            VALUES ('Dukuh Atas 1', 'CRITICAL_SEND_BACKUP', 'REKOMENDASI SISTEM: Segera luncurkan Bus Cadangan dari Pool Manggarai menuju Halte Dukuh Atas 1!', NOW())
+            ON CONFLICT (halte_name) DO UPDATE 
+            SET status = EXCLUDED.status, 
+                recommendation_text = EXCLUDED.recommendation_text, 
+                created_at = EXCLUDED.created_at
+        """)
+        stmt.execute("""
+            INSERT INTO passenger_density (halte_name, passenger_count, predicted_overload_pct, predicted_status, last_updated)
+            VALUES ('Kampung Melayu', 290, 145.0, 'Potensi Overload 145%', NOW())
+            ON CONFLICT (halte_name) DO UPDATE 
+            SET passenger_count = EXCLUDED.passenger_count, 
+                predicted_overload_pct = EXCLUDED.predicted_overload_pct, 
+                predicted_status = EXCLUDED.predicted_status, 
+                last_updated = EXCLUDED.last_updated
+        """)
+        stmt.execute("""
+            INSERT INTO system_recommendations (halte_name, status, recommendation_text, created_at)
+            VALUES ('Kampung Melayu', 'CRITICAL_SEND_BACKUP', 'REKOMENDASI SISTEM: Segera luncurkan Bus Cadangan dari Pool Manggarai menuju Halte Kampung Melayu!', NOW())
+            ON CONFLICT (halte_name) DO UPDATE 
+            SET status = EXCLUDED.status, 
+                recommendation_text = EXCLUDED.recommendation_text, 
+                created_at = EXCLUDED.created_at
+        """)
+        
         stmt.close()
         conn.close()
         
