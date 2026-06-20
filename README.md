@@ -1,20 +1,57 @@
 # ShelterEye — Transjakarta Real-Time Streaming Analytics & Lakehouse Pipeline
 
-Sistem pipeline data berskala besar (*Big Data Ecosystem*) untuk menyimulasikan, mengolah, dan memvisualisasikan data transaksi penumpang Transjakarta secara *real-time* menggunakan arsitektur modern Data Lakehouse.
+> Sistem pipeline data berskala besar (*Big Data Ecosystem*) untuk menyimulasikan, mengolah, dan memvisualisasikan data transaksi penumpang Transjakarta secara *real-time* menggunakan arsitektur modern **Data Lakehouse (Medallion Architecture)**.
+
+---
+
+## 🏗️ Arsitektur Sistem (End-to-End Pipeline)
+
+![ShelterEye System Architecture](docs/images/architecture_diagram.png)
+
+### Ringkasan Komponen Pipeline
+
+| Layer | Teknologi | Deskripsi |
+| :--- | :--- | :--- |
+| **Data Source** | CSV (180k rows) + GTFS GPS | Dataset historis & simulasi GPS bus real-time |
+| **Ingestion** | `feeder.py`, `telemetry_feeder.py` | Python WebSocket Async Client → Kafka Producer |
+| **Message Broker** | Apache Kafka (Port 9092) | Topic `topic-transjakarta` & `topic-telemetry` |
+| **🟫 Bronze Layer** | Parquet on Disk | Raw data stream disimpan terpartisi per tanggal di `storage/lakehouse/bronze/` |
+| **🥈 Silver Layer** | PySpark Structured Streaming | Parsing skema, watermarking (10 min), sliding window aggregasi |
+| **🥇 Gold Layer** | PySpark → PostgreSQL JDBC | Prediksi AI 20 menit + kalkulasi ETA spasial → tabel siap saji |
+| **Serving** | Streamlit (Port 8501) | Dashboard interaktif dengan peta Folium + Plotly charts |
+
+---
+
+## 📊 Evaluasi Model & Visualisasi Metrik
+
+![ShelterEye Evaluation Dashboard](docs/images/evaluation_dashboard.png)
+
+### Penjelasan Panel Evaluasi:
+
+| Panel | Metrik | Keterangan |
+| :--- | :--- | :--- |
+| **RMSE & MAPE per Batch** | Root Mean Square Error, Mean Absolute Percentage Error | Dievaluasi otomatis setiap micro-batch Spark. Tren menurun menunjukkan akurasi prediksi meningkat seiring waktu. |
+| **Kepadatan Halte Real-Time** | Passenger Count vs Kapasitas (200 orang) | Halte merah (Dukuh Atas 1 & Kampung Melayu) terdeteksi **OVERLOAD** ≥ 135% |
+| **Volume Data per Medallion Layer** | Bronze > Silver > Gold | Menunjukkan pengurangan volume wajar saat data dibersihkan & diagregasi per jam |
+| **Distribusi Okupansi Bus** | Occupancy % vs ETA (menit) | Scatter plot per bus aktif; titik merah = bus perlu segera dialihkan |
+
+### Formula Evaluasi Model (per Spark Batch):
+```
+RMSE = √( mean( (actual_count - predicted_count)² ) )
+MAPE = mean( |actual_count - predicted_count| / actual_count ) × 100%
+```
+> Dicetak otomatis ke terminal setiap batch di `passenger_logic.py` baris **268–289**.
 
 ---
 
 ## 📌 Informasi Dasar Sistem & Setup
-Berikut adalah parameter utama sistem yang wajib diketahui oleh seluruh anggota kelompok sebelum memulai pengembangan:
 
-1. **Database:** Menggunakan **PostgreSQL Database** sebagai *serving layer* terstruktur.
-2. **Broker Data (Streaming):** Menggunakan **Apache Kafka** untuk mengalirkan data secara *real-time*.
-3. **Nama Topik Kafka:** Seluruh data dialirkan melalui satu pintu bernama `topic-transjakarta`.
-4. **Alamat Koneksi & Port:**
-   * **Kafka:** `localhost:9092`
-   * **PostgreSQL:** `localhost:5432`
-5. **Skema Pengujian:** Cukup **SATU ORANG SAJA** yang menjalankan script `feeder.py` saat uji coba bersama agar antrean data di Kafka tidak duplikat atau bentrok.
-6. **Lokasi File Dataset:** File `dfTransjakarta180kRows.csv` wajib diletakkan di dalam folder `ingestion/dataset/` dengan penulisan huruf kapital yang presisi.
+1. **Database:** **PostgreSQL** sebagai *Gold Serving Layer* (Port `5432`)
+2. **Message Broker:** **Apache Kafka** untuk streaming real-time (Port `9092`)
+3. **Topik Kafka:** `topic-transjakarta` (transaksi) & `topic-telemetry` (GPS bus)
+4. **Parquet Bronze Storage:** `storage/lakehouse/bronze/` (partisi `date=YYYY-MM-DD`)
+5. **Satu feeder aktif per sesi uji:** Hanya satu orang yang menjalankan `feeder.py`
+6. **Dataset:** `dfTransjakarta180kRows.csv` → letakkan di `ingestion/dataset/`
 
 ---
 
@@ -22,70 +59,115 @@ Berikut adalah parameter utama sistem yang wajib diketahui oleh seluruh anggota 
 
 | Peran / Anggota | Komponen Kerja | Target Utama |
 | :--- | :--- | :--- |
-| **Anggota 1** | `ingestion/feeder.py` | Bertindak sebagai penyuplai data, mengawal jalannya broker Kafka, serta membantu administrasi infrastruktur / laporan. |
-| **Anggota 2** | `processing/passenger_logic.py` | Membuat kodingan PySpark Streaming untuk menghitung agregasi total volume/kepadatan penumpang per halte secara *real-time*. |
-| **Anggota 3** | `processing/spatial_eta_logic.py` | Membuat kodingan PySpark Streaming untuk analisis spasial dan estimasi waktu kedatangan armada (*ETA*) berdasarkan pergerakan koordinat halte. |
-| **Anggota 4** | `storage_dashboard/` (Backend) | Menyiapkan skema tabel di PostgreSQL dan mengonfigurasi jalur penerimaan data bersih (*sink*) yang dikirim oleh Apache Spark. |
-| **Anggota 5** | `storage_dashboard/` (Frontend) | Membangun visualisasi grafik tren kepadatan penumpang dan plot peta spasial halte menggunakan framework Streamlit. |
+| **Anggota 1** | `ingestion/feeder.py` | WebSocket Async Client → Kafka Producer untuk data transaksi |
+| **Anggota 2** | `processing/passenger_logic.py` | PySpark Streaming: kepadatan penumpang, AI forecasting, RMSE/MAPE eval |
+| **Anggota 3** | `processing/spatial_eta_logic.py` | PySpark Streaming: analisis spasial Haversine + kalkulasi ETA armada bus |
+| **Anggota 4** | `storage_dashboard/` (Backend) | Skema PostgreSQL, JDBC sink, Bronze Parquet lakehouse layer |
+| **Anggota 5** | `storage_dashboard/app.py` | Streamlit dashboard: peta Folium, chart Plotly, monitoring real-time |
 
 ---
 
-## 📂 Struktur Repositori (Clean Directory Structure)
-Pastikan folder proyek bersih tanpa ada penomoran di depannya:
+## 📂 Struktur Repositori
 
 ```text
 FP-BigData-Kelompok5/
+├── docs/
+│   └── images/
+│       ├── architecture_diagram.png     ← Diagram arsitektur sistem
+│       └── evaluation_dashboard.png     ← Visualisasi metrik evaluasi
 ├── ingestion/
 │   ├── dataset/
-│   │   └── dfTransjakarta180kRows.csv  <-- Masukkan manual di sini (di-gitignore)
-│   └── feeder.py                       <-- Script penyuplai data ke Kafka
+│   │   └── dfTransjakarta180kRows.csv   ← Masukkan manual (di-gitignore)
+│   ├── feeder.py                        ← Kafka producer transaksi
+│   └── telemetry_feeder.py              ← Kafka producer GPS bus
 ├── processing/
-│   ├── passenger_logic.py              <-- Tempat ngoding PySpark Kepadatan Penumpang
-│   └── spatial_eta_logic.py            <-- Tempat ngoding PySpark Estimasi Waktu (ETA)
-├── storage_dashboard/                  <-- Tempat script visualisasi UI (Streamlit, dll)
-└── docker-compose.yml                  <-- Konfigurasi infrastruktur utama
+│   ├── historical_patterns.json         ← Profil historis untuk AI forecasting
+│   ├── passenger_logic.py               ← PySpark: density, AI forecast, RMSE/MAPE
+│   ├── spatial_eta_logic.py             ← PySpark: Haversine ETA, GPS tracking
+│   └── checkpoints/                     ← Spark streaming state (auto-generated)
+├── sim-temp/
+│   ├── vehicle_server.py                ← GTFS WebSocket telemetry server
+│   └── vehicle_simulator.py             ← Simulasi pergerakan armada bus
+├── storage/
+│   └── lakehouse/
+│       └── bronze/                      ← Parquet Bronze Layer (auto-generated)
+│           ├── transactions/date=.../   ← Raw transaksi partisi harian
+│           └── telemetry/date=.../      ← Raw telemetry partisi harian
+├── storage_dashboard/
+│   └── app.py                           ← Streamlit UI dashboard
+├── docker-compose.yml                   ← Infrastruktur: Kafka + Spark + PostgreSQL
+└── GUIDE.md                             ← Panduan demo & rubrik penilaian
 ```
+
+---
 
 ## 🚀 Panduan Memulai (Quick Start)
 
-### 1. Sinkronisasi Awal & Unduh Dataset
-1. Jalankan perintah `git pull origin main` di terminal VS Code masing-masing.
-2. Unduh file dataset asli **`dfTransjakarta180kRows.csv`** (180k rows, ~44 MB) melalui tautan Google Drive yang dibagikan di grup WhatsApp.
-3. Pindahkan file tersebut ke dalam folder `ingestion/dataset/`. (*Catatan: File ini otomatis diabaikan oleh Git karena sudah didaftarkan di `.gitignore` agar repositori tetap ringan*).
+### 1. Clone & Sinkronisasi
+```bash
+git clone https://github.com/carlentray/FP-BigData-Kelompok5.git
+cd FP-BigData-Kelompok5
+git pull origin main
+```
+Letakkan file dataset `dfTransjakarta180kRows.csv` di folder `ingestion/dataset/`.
 
-### 2. Menyalakan Infrastruktur
-Pastikan aplikasi **Docker Desktop** sudah menyala di laptop Anda, kemudian buka terminal utama di *root directory* proyek (`FP-BigData-Kelompok5`) dan ketik:
+### 2. Nyalakan Infrastruktur Docker
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
-Tunggu hingga status seluruh container (Zookeeper, Kafka, Spark, Postgres) berubah menjadi Started atau Running.
+Tunggu hingga container **Zookeeper, Kafka, Spark Master/Worker, PostgreSQL** berstatus `Running`.
 
-### 3. Simulasi Ingestion (Aliran Data)
-Untuk mulai mengalirkan data mentah Transjakarta ke dalam broker Kafka, jalankan script feeder:
+### 3. Jalankan Simulasi GPS Bus
 ```bash
-python ingestion/feeder.py
-```
-Tekan Ctrl + C pada terminal untuk menghentikan simulasi aliran data.
-
-### 4. Menjalankan Pemrosesan Spasial & ETA
- 
-Buka terminal baru (biarkan `feeder.py` tetap berjalan), lalu hapus checkpoint lama jika script pernah dijalankan sebelumnya:
-```bash
-docker exec sheltereye-spark-master rm -rf /opt/spark/work-dir/processing/checkpoints/spatial_eta
-```
- 
-Kemudian jalankan script ETA via `spark-submit`:
-```bash
-docker exec sheltereye-spark-master /opt/spark/bin/spark-submit --master local[*] --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.3 /opt/spark/work-dir/processing/spatial_eta_logic.py
-```
- 
-Untuk memverifikasi hasil di database:
-```bash
-docker exec -it sheltereye-postgres psql -U admin -d db_sheltereye -c "SELECT * FROM bus_eta ORDER BY eta_minutes;"
+py -u sim-temp/vehicle_server.py
 ```
 
-### 5. Mematikan Sistem
-Jika sesi pengujian atau coding sudah selesai, matikan seluruh infrastruktur agar laptop tidak berat dengan perintah:
+### 4. Jalankan Ingestion Data Transaksi
 ```bash
-docker-compose down
+py -u ingestion/feeder.py
+py -u ingestion/telemetry_feeder.py
 ```
+
+### 5. Jalankan Spark Stream Processing
+```bash
+# Passenger Density, AI Forecasting & RMSE/MAPE Evaluation
+docker exec sheltereye-spark-master /opt/spark/bin/spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.3 \
+  /opt/spark/work-dir/processing/passenger_logic.py
+
+# Spatial ETA Calculation (terminal baru)
+docker exec sheltereye-spark-master /opt/spark/bin/spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.3 \
+  /opt/spark/work-dir/processing/spatial_eta_logic.py
+```
+
+### 6. Jalankan Dashboard
+```bash
+py -m streamlit run storage_dashboard/app.py
+```
+Buka browser di **http://localhost:8501**
+
+### 7. Matikan Sistem
+```bash
+docker compose down
+```
+
+---
+
+## 🔍 Monitoring & Observability
+
+| Tool | URL | Fungsi |
+| :--- | :--- | :--- |
+| **Streamlit Dashboard** | http://localhost:8501 | Peta real-time, chart density, log transaksi |
+| **Spark Streaming UI** | http://localhost:4040 | Throughput, latency, watermark, batch stats |
+| **Kafka Topics** | `docker exec -it sheltereye-kafka kafka-topics.sh --list --bootstrap-server localhost:9092` | Verifikasi topik aktif |
+| **PostgreSQL Query** | `docker exec -it sheltereye-postgres psql -U admin -d db_sheltereye` | Query langsung ke Gold Layer |
+
+---
+
+## 📖 Referensi Rubrik & Demo
+Lihat file **[GUIDE.md](GUIDE.md)** untuk:
+- ✅ Panduan demo presentasi step-by-step
+- ✅ Script bicara per rubrik penilaian
+- ✅ Referensi baris kode yang harus ditunjukkan ke penguji
+- ✅ Self-assessment keselarasan rubrik CPMK 1–4
