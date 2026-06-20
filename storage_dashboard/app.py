@@ -245,7 +245,8 @@ else:
             ).add_to(m)
             
         # Draw Real-Time Bus GPS Markers (Tracking Navigation)
-        real_buses = df_eta[df_eta['bus_id'].str.startswith('TJ-')]
+        # Deduplicate by bus_id to prevent multiple markers stacking on top of each other
+        real_buses = df_eta[df_eta['bus_id'].str.startswith('TJ-')].drop_duplicates(subset=['bus_id'])
         for idx, bus in real_buses.iterrows():
             if pd.notna(bus['bus_lat']) and pd.notna(bus['bus_lon']):
                 bus_popup_html = f"""

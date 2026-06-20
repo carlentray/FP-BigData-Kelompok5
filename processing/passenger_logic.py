@@ -1,9 +1,10 @@
 import os
 import sys
 import json
+import traceback
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, to_timestamp, window, expr, hour, minute, floor, lit, coalesce, concat
+from pyspark.sql.functions import col, from_json, to_timestamp, window, expr, hour, minute, floor, lit, coalesce, concat, abs, mean, sqrt
 
 
 # 1. Konfigurasi Awal & Host Resolution
@@ -264,6 +265,29 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
         
     print(f"\n--- [Batch ID: {batch_id}] Memproses data kepadatan penumpang & sistem rekomendasi ---")
     
+    # [COMPREHENSIVE MODEL EVALUATION - RMSE & MAPE]
+    # Hitung metrik evaluasi model AI untuk monitoring performa presisi prediksi
+    try:
+        eval_df = batch_df.select(
+            col("passenger_count").cast("double").alias("actual"),
+            col("historical_prediction").cast("double").alias("predicted")
+        ).filter(col("actual") > 0.0)
+        
+        if not eval_df.isEmpty():
+            metrics_df = eval_df.select(
+                sqrt(mean((col("actual") - col("predicted"))**2)).alias("rmse"),
+                (mean(abs(col("actual") - col("predicted")) / col("actual")) * 100.0).alias("mape")
+            )
+            metrics = metrics_df.collect()[0]
+            rmse_val = metrics["rmse"] if metrics["rmse"] is not None else 0.0
+            mape_val = metrics["mape"] if metrics["mape"] is not None else 0.0
+            print(f"[AI MODEL EVALUATION] Batch {batch_id} | RMSE: {rmse_val:.4f} | MAPE: {mape_val:.2f}%")
+        else:
+            print(f"[AI MODEL EVALUATION] Batch {batch_id} | No active transactions to calculate prediction error.")
+    except Exception as eval_err:
+        print(f"[AI MODEL EVALUATION ERROR] Gagal menghitung metrik evaluasi: {eval_err}")
+        traceback.print_exc()
+    
     # 1. Ambil data ETA bus terdekat dari PostgreSQL (yang di-update oleh Anggota 3)
     try:
         bus_eta_df = spark.read \
@@ -439,6 +463,7 @@ def write_to_postgres_and_recommend(batch_df, batch_id):
         print("Data sukses disimpan ke PostgreSQL database (UPSERT berhasil)!")
     except Exception as ex:
         print(f"Gagal menulis data ke database PostgreSQL. Pastikan Docker Postgres aktif! Error: {ex}")
+        traceback.print_exc()
 
 # Fungsi helper untuk menulis raw transactions ke PostgreSQL (ON CONFLICT DO NOTHING)
 def write_raw_transactions_to_postgres(batch_df, batch_id):

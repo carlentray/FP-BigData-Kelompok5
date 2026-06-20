@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import traceback
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, to_timestamp, lit, radians, sin, cos, sqrt, asin, when, coalesce
@@ -232,6 +233,7 @@ def write_eta_to_postgres(batch_df, batch_id):
         print("Data ETA sukses disimpan ke PostgreSQL database (UPSERT berhasil)!")
     except Exception as ex:
         print(f"Gagal menulis data ETA ke database PostgreSQL. Error: {ex}")
+        traceback.print_exc()
 
 # 6. Memulai Streaming Query
 print("Memulai streaming pemrosesan ETA Spasial...")
