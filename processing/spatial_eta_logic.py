@@ -229,10 +229,26 @@ print("Memulai streaming pemrosesan ETA Spasial...")
 checkpoint_dir = "processing/checkpoints/bus_eta"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
+# A. Tulis ke Database postgres (Serving/Gold Layer)
 query = filtered_eta_df.writeStream \
     .foreachBatch(write_eta_to_postgres) \
     .outputMode("update") \
     .option("checkpointLocation", checkpoint_dir) \
     .start()
 
-query.awaitTermination()
+# B. Tulis Raw Telemetry ke Lakehouse Bronze Layer (Format Parquet, Partisi berdasarkan Tanggal)
+from pyspark.sql.functions import to_date
+bronze_telemetry_df = processed_telemetry_df.withColumn("date", to_date(col("timestamp")))
+checkpoint_bronze_telemetry = "processing/checkpoints/bronze_telemetry"
+os.makedirs(checkpoint_bronze_telemetry, exist_ok=True)
+
+query_bronze_telemetry = bronze_telemetry_df.writeStream \
+    .format("parquet") \
+    .partitionBy("date") \
+    .option("path", "storage/lakehouse/bronze/telemetry") \
+    .option("checkpointLocation", checkpoint_bronze_telemetry) \
+    .outputMode("append") \
+    .start()
+
+# Standby menangkap data secara kontinu
+spark.streams.awaitAnyTermination()

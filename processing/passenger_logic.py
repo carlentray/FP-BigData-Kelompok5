@@ -491,6 +491,7 @@ checkpoint_raw = "processing/checkpoints/raw_transactions"
 os.makedirs(checkpoint_dir, exist_ok=True)
 os.makedirs(checkpoint_raw, exist_ok=True)
 
+# 1. Write to Serving Database (Gold Layer)
 query_density = final_streaming_df.writeStream \
     .foreachBatch(write_to_postgres_and_recommend) \
     .outputMode("update") \
@@ -501,6 +502,20 @@ query_raw = processed_stream_df.writeStream \
     .foreachBatch(write_raw_transactions_to_postgres) \
     .outputMode("append") \
     .option("checkpointLocation", checkpoint_raw) \
+    .start()
+
+# 2. Write Raw Data to Lakehouse Bronze Layer (Format Parquet, Partisi berdasarkan Tanggal)
+from pyspark.sql.functions import to_date
+bronze_df = processed_stream_df.withColumn("date", to_date(col("timestamp")))
+checkpoint_bronze = "processing/checkpoints/bronze_transactions"
+os.makedirs(checkpoint_bronze, exist_ok=True)
+
+query_bronze = bronze_df.writeStream \
+    .format("parquet") \
+    .partitionBy("date") \
+    .option("path", "storage/lakehouse/bronze/transactions") \
+    .option("checkpointLocation", checkpoint_bronze) \
+    .outputMode("append") \
     .start()
 
 # Standby menangkap data secara kontinu

@@ -1,2 +1,3 @@
 ingestion/dataset/
 processing/checkpoints/
+storage/lakehouse/
